@@ -1,0 +1,38 @@
+name: Milfbleusky
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "28 * * * *"
+
+permissions:
+  contents: write
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - run: pip install atproto
+
+      - name: Run bot
+        env:
+          BSKY_USERNAME: ${{ secrets.BSKY_USERNAME_MILFBLEUSKY }}
+          BSKY_PASSWORD: ${{ secrets.BSKY_PASSWORD_MILFBLEUSKY }}
+          STATE_FILE: state_milfbleusky.json
+        run: python milfbleusky_reposter.py
+
+      - name: Commit state
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git add state_milfbleusky.json
+          git commit -m "Update Milfbleusky state" || echo "No changes"
+          git pull --rebase || true
+          git push
