@@ -3,7 +3,7 @@ name: Milfbleusky
 on:
   workflow_dispatch:
   schedule:
-    - cron: "28 * * * *"
+    - cron: "27 * * * *"
 
 permissions:
   contents: write
