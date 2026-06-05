@@ -20,7 +20,6 @@ LIST_MEMBER_LIMIT = 1500
 SLEEP_SECONDS = 2
 
 STATE_FILE = os.getenv("STATE_FILE", "state_milfbleusky.json")
-
 LIST_RE = re.compile(r"bsky\.app/profile/([^/]+)/lists/([^/?#]+)")
 
 
@@ -66,11 +65,15 @@ def get_list_members(client, list_uri):
     cursor = None
 
     while len(members) < LIST_MEMBER_LIMIT:
-        resp = client.app.bsky.graph.get_list({
+        params = {
             "list": list_uri,
-            "limit": 100,
-            "cursor": cursor
-        })
+            "limit": 100
+        }
+
+        if cursor:
+            params["cursor"] = cursor
+
+        resp = client.app.bsky.graph.get_list(params)
 
         for item in resp.items:
             members.append(item.subject.did)
@@ -78,41 +81,52 @@ def get_list_members(client, list_uri):
             if len(members) >= LIST_MEMBER_LIMIT:
                 break
 
-        cursor = resp.cursor
+        cursor = getattr(resp, "cursor", None)
         if not cursor:
             break
 
     return members
 
 
-def has_media(post):
-    embed = getattr(post, "embed", None)
+def is_repost_item(item):
+    return getattr(item, "reason", None) is not None
 
+
+def is_reply(post):
+    return bool(getattr(post.record, "reply", None))
+
+
+def is_quote(post):
+    embed = getattr(post.record, "embed", None)
     if not embed:
         return False
 
-    py_type = getattr(embed, "py_type", "") or ""
-    py_type = py_type.lower()
+    text = str(embed).lower()
+    return "app.bsky.embed.record" in text or "recordwithmedia" in text
 
-    if "images" in py_type:
-        return True
 
-    if "video" in py_type:
-        return True
+def has_media(post):
+    embed = getattr(post.record, "embed", None)
+    if not embed:
+        return False
 
-    if "recordwithmedia" in py_type:
-        return True
+    text = str(embed).lower()
 
-    if hasattr(embed, "images"):
-        return True
+    if "recordwithmedia" in text:
+        return False
 
-    if hasattr(embed, "playlist"):
-        return True
+    return "images" in text or "video" in text
 
-    if hasattr(embed, "media"):
-        return True
 
-    return False
+def is_valid_media_post(post):
+    if not has_media(post):
+        return False
+    if is_reply(post):
+        return False
+    if is_quote(post):
+        return False
+
+    return True
 
 
 def post_created_at(post):
@@ -127,10 +141,7 @@ def is_within_hours(created, hours):
         return False
 
     try:
-        created_dt = datetime.fromisoformat(
-            created.replace("Z", "+00:00")
-        )
-
+        created_dt = datetime.fromisoformat(created.replace("Z", "+00:00"))
         age_hours = (
             datetime.now(timezone.utc) - created_dt
         ).total_seconds() / 3600
@@ -179,6 +190,10 @@ def main():
             })
 
             for item in feed.feed:
+                # Geen reposts
+                if is_repost_item(item):
+                    continue
+
                 post = item.post
 
                 uri = post.uri
@@ -186,13 +201,15 @@ def main():
                 author_did = post.author.did
                 created = post_created_at(post)
 
+                # Alleen originele posts van dit lijstlid
                 if author_did != did:
                     continue
 
                 if uri in state["reposted"]:
                     continue
 
-                if not has_media(post):
+                # Alleen media, geen reply, geen quote
+                if not is_valid_media_post(post):
                     continue
 
                 if not is_within_hours(created, HOURS_BACK):
@@ -208,9 +225,10 @@ def main():
         except Exception as e:
             print(f"Skip member {did}: {e}")
 
+    # Oudste eerst, nieuwste als laatste
     candidates.sort(key=lambda x: x["created_at"])
 
-    print(f"Mediapost kandidaten laatste {HOURS_BACK} uur: {len(candidates)}")
+    print(f"Originele mediapost kandidaten laatste {HOURS_BACK} uur: {len(candidates)}")
 
     done = 0
 
@@ -236,7 +254,6 @@ def main():
             }
 
             print(f"Reposted: {uri}")
-
             time.sleep(SLEEP_SECONDS)
 
             try:
